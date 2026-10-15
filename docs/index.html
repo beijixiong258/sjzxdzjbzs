@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>三角洲行动 · 全面战场载具可视化</title>
+<link rel="stylesheet" href="./style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <div class="title">三角洲行动 · 全面战场载具可视化</div>
+  <nav id="pageNav" aria-label="主导航">
+    <a class="page-link active" href="#home" data-page="home" aria-current="page">主页</a>
+    <a class="page-link" href="#combat" data-page="combat">甲弹对抗</a>
+    <a class="page-link" href="#repair" data-page="repair">修理规则</a>
+  </nav>
+</header>
+
+<section id="dataError" class="data-error" role="alert" hidden>
+  <h2>页面未能加载</h2>
+  <p id="dataErrorMessage"></p>
+  <p>如果修改过数据，请检查 docs/data.json，保存后重新加载。</p>
+  <button id="reloadData">重新加载</button>
+</section>
+<main id="homePage" class="page viewer-page" aria-label="载具展示">
+  <div class="controls">
+    <label><input type="checkbox" id="showModels" checked /> 车体</label>
+    <button id="soloCollision" title="隐藏主模型，只留下实车碰撞体，方便看子弹判定体">只看碰撞体</button>
+    <label><input type="checkbox" id="showAxes" /> 坐标轴</label>
+    <label><input type="checkbox" id="autoRotate" /> 自动旋转</label>
+  </div>
+  <div class="viewer-layout">
+  <aside id="vehicleList">
+    <h2>载具</h2>
+    <div id="vehicleGroups"></div>
+  </aside>
+
+  <section id="viewport">
+    <canvas id="scene"></canvas>
+    <div id="labels"></div>
+
+    <div id="viewbar">
+      <span class="viewbar-title">视角</span>
+      <button class="view-btn active" data-view="3d">立体</button>
+      <button class="view-btn" data-view="front">前视</button>
+      <button class="view-btn" data-view="side">侧视</button>
+      <button class="view-btn" data-view="top">俯视</button>
+      <button class="view-btn" data-view="rear">后视</button>
+      <button id="resetView" title="恢复默认立体视角、缩放和观察中心">重置视角</button>
+
+      <label class="view-slider">盒透明
+        <input type="range" id="boxAlpha" min="2" max="60" value="10" />
+      </label>
+    </div>
+
+    <div id="layerbar">
+      <div class="layer-group">
+        <span class="viewbar-title" title="部位合并显示；同侧装甲与履带各保留一个外框">命中部位</span>
+        <label class="layer" title="显示 / 隐藏部位盒、炮塔碰撞网格和反应装甲">
+          <input type="checkbox" id="showBoxes" checked /> 显示</label>
+        <label class="layer" title="关掉后只留线框，车体和碰撞体看得更清楚">
+          <input type="checkbox" id="boxFill" checked /> 填充</label>
+        <label class="layer" title="每个部位只显示一个名称标签">
+          <input type="checkbox" id="showLabels" checked /> 部位标签</label>
+      </div>
+      <span class="layer-sep"></span>
+      <div class="layer-group">
+        <span class="viewbar-title" title="物理、导航、装配及实车碰撞几何，默认关闭">其他碰撞体</span>
+        <label class="layer" title="载具撞击碰撞盒：车撞车 / 车撞人时用的物理块（DFMVehicleCollisionComponent 的主盒 + 附加盒）">
+          <input type="checkbox" class="layer-toggle" data-layer="impact" /> 载具撞击盒</label>
+        <label class="layer" title="底盘物理盒：底盘贴地那一层扁盒，管接地与翻越">
+          <input type="checkbox" class="layer-toggle" data-layer="chassis" /> 底盘物理盒</label>
+        <label class="layer" title="AI 导航盒：NavArea_Obstacle 阻挡寻路、NavArea_Null 在导航网格上挖洞">
+          <input type="checkbox" class="layer-toggle" data-layer="nav" /> AI 导航盒</label>
+        <label class="layer" title="装配体盒：DFMVehicleAssembledComponent 的装配分区，编辑器辅助用，不参与战斗结算">
+          <input type="checkbox" class="layer-toggle" data-layer="assembly" /> 装配体盒</label>
+        <label class="layer" title="实车碰撞体：每个外观件的 *_COL 简化网格，子弹与投射物就是打在这上面">
+          <input type="checkbox" class="layer-toggle" data-layer="colmesh" /> 实车碰撞体</label>
+      </div>
+      <button id="layerHelpBtn" title="每种盒分别是什么、有什么用">盒说明</button>
+    </div>
+
+    <div id="layerHelp" hidden>
+      <h3>四种碰撞 + 命中部位</h3>
+      <table>
+        <tr><th>#</th><th>名称</th><th>作用</th><th>形状 / 来源</th></tr>
+        <tr>
+          <td>1</td><td><span class="swatch colmesh"></span>实车碰撞体</td>
+          <td>子弹、投射物打到车上的判定体；没有整体判定盒，就是各外观件判定体的并集</td>
+          <td>每个外观件自己的简化网格 <code>*_COL</code></td>
+        </tr>
+        <tr>
+          <td>2</td><td><span class="swatch side"></span>命中部位</td>
+          <td>决定“打中哪里、伤害乘多少、能不能忽略结算”</td>
+          <td>同一部位的分段合为一个显示框；炮塔沿用碰撞网格，粉色表示反应装甲</td>
+        </tr>
+        <tr>
+          <td>3</td><td><span class="swatch impact"></span>载具撞击盒</td>
+          <td>车撞车 / 车撞人时的物理块，和子弹判定无关</td>
+          <td><code>DFMVehicleCollisionComponent</code> 主盒 + 附加盒</td>
+        </tr>
+        <tr>
+          <td>4</td><td><span class="swatch chassis"></span>底盘物理盒</td>
+          <td>底盘贴地的那层扁盒，管接地与越障</td>
+          <td><code>GPAdvancedBoxComponent</code></td>
+        </tr>
+        <tr>
+          <td>5</td><td><span class="swatch nav"></span>AI 导航盒</td>
+          <td>给 AI 寻路用：阻挡，或在导航网格上挖洞</td>
+          <td><code>BoxComponent</code> 的 <code>NavArea_*</code></td>
+        </tr>
+        <tr>
+          <td>6</td><td><span class="swatch assembly"></span>装配体盒</td>
+          <td>装配分区，编辑器辅助用，不参与战斗结算</td>
+          <td><code>DFMVehicleAssembledComponent.BoxDataInfos</code></td>
+        </tr>
+      </table>
+      <div class="owner">想单独看某一层时，把主模型（顶部“车体”）关掉即可；点“只看碰撞体”会一次把模型关掉、并只留实车碰撞体。</div>
+    </div>
+
+    <div id="legend">
+      <div><span class="swatch body"></span><span id="bodyLegendLabel">车体 ×1.0</span></div>
+      <div><span class="swatch engine"></span><span id="engineLegendLabel">发动机舱</span></div>
+      <div><span class="swatch front"></span><span id="frontLegendLabel">车首装甲</span></div>
+      <div><span class="swatch side"></span><span id="sideLegendLabel">侧面/顶部装甲带</span></div>
+      <div><span class="swatch track"></span>履带（独立耐久）</div>
+      <div><span class="swatch turret"></span>炮塔/武器站</div>
+      <div><span class="swatch armor"></span>反应装甲</div>
+      <div><span class="swatch ignore"></span>不参与伤害结算</div>
+      <div><span class="swatch impact"></span>载具撞击碰撞盒</div>
+      <div><span class="swatch chassis"></span>底盘物理盒</div>
+      <div><span class="swatch nav"></span>AI 导航盒</div>
+      <div><span class="swatch assembly"></span>装配体盒</div>
+      <div><span class="swatch colmesh"></span>实车碰撞体</div>
+    </div>
+    <div id="hint">左键旋转 · 右键平移 · 滚轮缩放 · 点击部位查看详情</div>
+    <div id="status"></div>
+  </section>
+
+  <aside id="detailPanel">
+    <div id="vehicleInfo"></div>
+    <div id="boxInfo"></div>
+    <div id="boxListCard"></div>
+  </aside>
+  </div>
+</main>
+
+<section id="combatPage" class="page content-page" aria-labelledby="combatTitle" hidden>
+  <div class="page-content">
+    <div class="page-intro">
+      <h1 id="combatTitle">甲弹对抗</h1>
+      <p>先选择目标与命中条件，再选择武器，查看单次命中的伤害。</p>
+    </div>
+    <div id="combatControls" class="combat-controls">
+      <fieldset class="selection-card">
+        <legend><span class="step-number">1</span>选择目标</legend>
+        <div class="field-grid">
+          <label class="field" for="simDomain">目标类型
+            <select id="simDomain"><option value="">请选择目标类型</option></select>
+          </label>
+          <label class="field" for="simTarget">具体载具
+            <select id="simTarget" disabled><option value="">请先选择目标类型</option></select>
+          </label>
+          <label class="field" for="simPart">击中位置
+            <select id="simPart" disabled><option value="-1">请先选择载具</option></select>
+          </label>
+          <label class="field" for="simAngle">入射角
+            <select id="simAngle" disabled><option value="0">垂直 0–10°</option></select>
+          </label>
+        </div>
+        <p id="combatTargetSummary" class="selection-summary">选择目标后，可设置击中位置和入射角。</p>
+      </fieldset>
+      <fieldset id="weaponSelection" class="selection-card" disabled>
+        <legend><span class="step-number">2</span>选择武器</legend>
+        <div class="field-grid">
+          <label class="field" for="simWeaponType">武器类别
+            <select id="simWeaponType">
+              <option value="">请选择武器类别</option>
+              <option value="gadgets">步兵武器</option>
+              <option value="weapons">载具武器</option>
+            </select>
+          </label>
+          <label class="field" for="simWeapon">具体武器
+            <select id="simWeapon" disabled><option value="">请先选择武器类别</option></select>
+          </label>
+        </div>
+        <p id="combatWeaponSummary" class="selection-summary">请先在左侧选择目标。</p>
+      </fieldset>
+    </div>
+    <section class="combat-result" aria-labelledby="resultTitle">
+      <h2 id="resultTitle">伤害结果</h2>
+      <div id="combatResult" aria-live="polite">
+        <div class="empty-state">选择目标和武器后，显示伤害结果与计算过程。</div>
+      </div>
+    </section>
+  </div>
+</section>
+
+<section id="repairPage" class="page content-page" aria-labelledby="repairTitle" hidden>
+  <div class="page-content">
+    <div class="page-intro">
+      <h1 id="repairTitle">修理规则</h1>
+      <p>查看各载具的修理来源、自愈延迟、修复速度和修复上限。</p>
+    </div>
+    <div id="repairTable" class="repair-table"></div>
+  </div>
+</section>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
